@@ -3,6 +3,7 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.services.excel_advisory_service import excel_advisory_service
 from app.services.gpt_backup_service import gpt_backup_service
 
 _PLACEHOLDER_MARKERS = ("example", "your-", "placeholder", "real-agvisely")
@@ -52,7 +53,7 @@ class AgviselyService:
             "longitude": longitude,
         }
 
-    async def _advisory_fallback(
+    async def _gpt_advisory_fallback(
         self,
         crop: str,
         district: Optional[str],
@@ -71,10 +72,64 @@ class AgviselyService:
         return {
             "source": "fallback",
             "crop": crop,
-            "message": f"Crop advisory for {crop} is temporarily unavailable from Agvisely.",
+            "message": f"Crop advisory for {crop} is temporarily unavailable.",
             "district": district,
             "upazila": upazila,
         }
+
+    async def _excel_then_gpt_advisory(
+        self,
+        crop: str,
+        district: Optional[str],
+        upazila: Optional[str],
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
+        stage: Optional[str] = None,
+        include_weather: bool = False,
+    ) -> dict:
+        """Two-tier selection: Excel rules first, GPT fallback second.
+
+        Weather is only fetched when Agvisely live API is configured (trusted
+        thresholds) or include_weather=True. Skipping GPT weather backup here
+        saves several seconds on the hot path.
+        """
+        weather: dict = {"source": "skipped"}
+        if self._is_configured():
+            weather = await self.get_weather(
+                latitude=latitude,
+                longitude=longitude,
+                district=district,
+                upazila=upazila,
+            )
+        elif include_weather:
+            weather = await self.get_weather(
+                latitude=latitude,
+                longitude=longitude,
+                district=district,
+                upazila=upazila,
+            )
+
+        try:
+            excel_hit = excel_advisory_service.lookup(
+                crop=crop,
+                weather=weather,
+                district=district,
+                upazila=upazila,
+                stage=stage,
+            )
+        except Exception:
+            excel_hit = None
+
+        if excel_hit:
+            weather_clean = {
+                k: v
+                for k, v in (weather or {}).items()
+                if k not in {"agent_speech", "summary"}
+            }
+            excel_hit["weather"] = weather_clean
+            return excel_hit
+
+        return await self._gpt_advisory_fallback(crop, district, upazila)
 
     async def get_weather(
         self,
@@ -112,9 +167,23 @@ class AgviselyService:
         longitude: Optional[float] = None,
         district: Optional[str] = None,
         upazila: Optional[str] = None,
+        stage: Optional[str] = None,
+        include_weather: bool = False,
     ) -> dict:
+        # Preferred path: Excel matrix → GPT fallback (2-tier selection).
+        if settings.EXCEL_ADVISORY_ENABLED:
+            return await self._excel_then_gpt_advisory(
+                crop=crop,
+                district=district,
+                upazila=upazila,
+                latitude=latitude,
+                longitude=longitude,
+                stage=stage,
+                include_weather=include_weather,
+            )
+
         if not self._is_configured():
-            return await self._advisory_fallback(crop, district, upazila)
+            return await self._gpt_advisory_fallback(crop, district, upazila)
 
         params = {"crop": crop}
         if latitude is not None and longitude is not None:
@@ -135,7 +204,7 @@ class AgviselyService:
                 response.raise_for_status()
                 return response.json()
         except (httpx.HTTPError, httpx.TimeoutException):
-            return await self._advisory_fallback(crop, district, upazila)
+            return await self._gpt_advisory_fallback(crop, district, upazila)
 
 
 agvisely_service = AgviselyService()

@@ -23,6 +23,22 @@ class Settings:
 
     GPT_BACKUP_ENABLED: bool = os.getenv("GPT_BACKUP_ENABLED", "true").lower() == "true"
 
+    # Crop advisory: Excel rules first, then GPT fallback
+    EXCEL_ADVISORY_ENABLED: bool = (
+        os.getenv("EXCEL_ADVISORY_ENABLED", "true").lower() == "true"
+    )
+    EXCEL_ADVISORY_PATH: str = os.getenv(
+        "EXCEL_ADVISORY_PATH",
+        os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "Agvisely_Aman Rice 1.xlsx",
+        ),
+    )
+    # Skip LLM tool loop when Excel matches (much faster phone answers)
+    EXCEL_FAST_PATH: bool = os.getenv("EXCEL_FAST_PATH", "true").lower() == "true"
+    # After Excel filter, use a small LLM to speak with conversation awareness
+    EXCEL_SPEAK_LLM: bool = os.getenv("EXCEL_SPEAK_LLM", "true").lower() == "true"
+
     # TTS: use "edge" for Bangladeshi Bangla (bn-BD), or "openai" for OpenAI voices
     TTS_PROVIDER: str = os.getenv("TTS_PROVIDER", "edge")
     TTS_MODEL: str = os.getenv("TTS_MODEL", "tts-1")

@@ -27,6 +27,12 @@ KNOWN_PLACES: dict[str, dict[str, str]] = {
     "বরিশাল": {"district": "Barishal"},
     "rangpur": {"district": "Rangpur"},
     "রংপুর": {"district": "Rangpur"},
+    "bhanga": {"upazila": "Bhanga", "district": "Faridpur"},
+    "ভাঙা": {"upazila": "Bhanga", "district": "Faridpur"},
+    "shariatpur": {"district": "Shariatpur"},
+    "শরীয়তপুর": {"district": "Shariatpur"},
+    "শরিয়তপুর": {"district": "Shariatpur"},
+    "শৈতপুর": {"district": "Shariatpur"},  # STT variant
     "chattogram": {"district": "Chattogram"},
     "chittagong": {"district": "Chattogram"},
     "চট্টগ্রাম": {"district": "Chattogram"},
