@@ -8,7 +8,7 @@ export default function FarmerForm() {
     district: "",
     upazila: "",
     union_name: "",
-    preferred_crop: "rice",
+    preferred_crop: "aman rice",
   });
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -75,10 +75,17 @@ export default function FarmerForm() {
         </label>
         <label>
           পছন্দের ফসল
-          <input
+          <select
             value={form.preferred_crop}
             onChange={(e) => update("preferred_crop", e.target.value)}
-          />
+          >
+            <option value="aman rice">আমন ধান</option>
+            <option value="rice">ধান</option>
+            <option value="wheat">গম</option>
+            <option value="maize">ভুট্টা</option>
+            <option value="potato">আলু</option>
+            <option value="jute">পাট</option>
+          </select>
         </label>
         <button type="submit" className="primary full" disabled={loading}>
           {loading ? "সংরক্ষণ হচ্ছে..." : "সংরক্ষণ করুন"}

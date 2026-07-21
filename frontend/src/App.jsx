@@ -35,7 +35,7 @@ export default function App() {
           <p className="eyebrow">CIMMYT · Agvisely</p>
           <h1>কৃষি সহায়তা এজেন্ট</h1>
           <p className="subtitle">
-            বাংলায় আবহাওয়া, ফসল পরামর্শ ও রোগ সতর্কতা — AI এজেন্ট
+            বাংলায় আবহাওয়া ও ফসল পরামর্শ — Excel নিয়ম + কথোপকথন বুঝে উত্তর
           </p>
         </div>
         <div className={`status-pill ${status}`}>

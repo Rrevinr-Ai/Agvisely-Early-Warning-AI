@@ -3,7 +3,14 @@ import { api } from "../api";
 import { createWavRecorder, wavToBase64 } from "../utils/audioRecorder";
 import SpeakButton from "./SpeakButton";
 
-const crops = ["rice", "wheat", "maize", "potato", "jute"];
+const crops = [
+  { value: "aman rice", label: "আমন ধান" },
+  { value: "rice", label: "ধান (সাধারণ)" },
+  { value: "wheat", label: "গম" },
+  { value: "maize", label: "ভুট্টা" },
+  { value: "potato", label: "আলু" },
+  { value: "jute", label: "পাট" },
+];
 
 const intentLabels = {
   weather: "আবহাওয়া",
@@ -14,10 +21,11 @@ const intentLabels = {
 };
 
 const quickQuestions = [
-  "আজকের আবহাওয়া কেমন?",
-  "ধানের পরামর্শ দিন",
-  "এখন কোন ফসল লাগাব?",
-  "গম রোগ সম্পর্কে বলুন",
+  "I am a rice farmer from Babuganj. Is there any weather advisory for me for next 5 days?",
+  "I am a rice farmer from Rangpur Sadar. Is there any weather advisory for me for next 5 days?",
+  "Is there any other information that you can provide?",
+  "I want to cultivate wheat in the upcoming season. Is there any advisory that you can provide?",
+  "মাটি পরীক্ষায় টাকা নেই, তাহলে কী করব?",
 ];
 
 function createSessionId() {
@@ -31,7 +39,7 @@ export default function CallPanel({ onCallComplete }) {
     phone_number: "01712345678",
     district: "",
     upazila: "",
-    crop: "rice",
+    crop: "aman rice",
   });
   const [question, setQuestion] = useState("");
   const [conversation, setConversation] = useState([]);
@@ -213,18 +221,21 @@ export default function CallPanel({ onCallComplete }) {
   return (
     <section className="panel call-panel">
       <div className="panel-header">
-        <h2>📞 AI কল এজেন্ট</h2>
-        <p>Feature phone call-এর মতো Bangla conversation — text বা voice দিয়ে প্রশ্ন করুন</p>
+        <h2>AI কল এজেন্ট</h2>
+        <p>
+          CIMMYT demo: Babuganj (থোড়, ৪৪মিমি/&gt;৩৫°C) ও Rangpur Sadar (কুশি, ১০মিমি) —
+          আলাদা কৃষকের জন্য “কল শেষ” করে নতুন session নিন
+        </p>
       </div>
 
       <div className="call-info-grid">
         <article className="call-info-card">
-          <h3>🌐 Web Simulation</h3>
-          <p>নিচে chat-এ প্রশ্ন করুন — agent মনে রাখবে (same call session)</p>
+          <h3>Web Simulation</h3>
+          <p>Excel নিয়ম + কথোপকথন বুঝে উত্তর — একই session-এ আগের কথা রাখে</p>
           <span className="call-badge">Session: {sessionId.slice(0, 8)}...</span>
         </article>
         <article className="call-info-card">
-          <h3>📱 Real Phone Call</h3>
+          <h3>Real Phone Call</h3>
           <p>Twilio hotline configure করলে farmer সরাসরি call করতে পারবে</p>
           <strong className="hotline">{hotlineNumber}</strong>
           {publicUrl && (
@@ -247,7 +258,7 @@ export default function CallPanel({ onCallComplete }) {
           <input
             value={form.district}
             onChange={(e) => update("district", e.target.value)}
-            placeholder="ঐচ্ছিক — voice/text-এ বললে সেটা ব্যবহার হবে"
+            placeholder="ঐচ্ছিক — কথায় বললে সেটা প্রাধান্য পাবে"
           />
         </label>
         <label>
@@ -258,8 +269,8 @@ export default function CallPanel({ onCallComplete }) {
           ফসল
           <select value={form.crop} onChange={(e) => update("crop", e.target.value)}>
             {crops.map((crop) => (
-              <option key={crop} value={crop}>
-                {crop}
+              <option key={crop.value} value={crop.value}>
+                {crop.label}
               </option>
             ))}
           </select>
@@ -283,7 +294,7 @@ export default function CallPanel({ onCallComplete }) {
       <div className="call-chat">
         {conversation.length === 0 && (
           <p className="chat-empty">
-            কল শুরু হয়েছে — "আজকের আবহাওয়া কেমন?" বা voice button দিয়ে প্রশ্ন করুন
+            কল শুরু — জেলা, ফসল ও পর্যায় (কুশি/থোড়) বলে প্রশ্ন করুন; পরে follow-up দিতে পারবেন
           </p>
         )}
 
@@ -291,7 +302,7 @@ export default function CallPanel({ onCallComplete }) {
           <div key={index} className={`chat-bubble ${msg.role}`}>
             {msg.role === "user" && msg.isVoice && (
               <div className="chat-meta">
-                <span>🎤 আপনি বলেছেন</span>
+                <span>আপনি বলেছেন</span>
               </div>
             )}
             {msg.role === "agent" && (
@@ -311,13 +322,13 @@ export default function CallPanel({ onCallComplete }) {
 
         {loading && (
           <div className="chat-bubble agent loading-bubble">
-            <p>এজেন্ট ভাবছে...</p>
+            <p>পরামর্শ তৈরি হচ্ছে...</p>
           </div>
         )}
 
         {transcribing && (
           <div className="chat-bubble agent loading-bubble">
-            <p>🎤 শুনছি এবং পাঠাচ্ছি...</p>
+            <p>শুনছি এবং পাঠাচ্ছি...</p>
           </div>
         )}
         <div ref={chatEndRef} />
@@ -330,7 +341,7 @@ export default function CallPanel({ onCallComplete }) {
           className="call-input"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
-          placeholder="Bangla-তে প্রশ্ন লিখুন বা 🎤 দিয়ে বলুন..."
+          placeholder="বাংলায় প্রশ্ন লিখুন বা মাইক দিয়ে বলুন..."
           disabled={loading || transcribing || !callActive}
         />
         <button
@@ -339,7 +350,7 @@ export default function CallPanel({ onCallComplete }) {
           onClick={recording ? stopRecording : startRecording}
           disabled={loading || transcribing}
         >
-          {recording ? `⏹ থামান (${recordingSeconds}s)` : "🎤 বলুন"}
+          {recording ? `থামান (${recordingSeconds}s)` : "বলুন"}
         </button>
         <button
           type="button"

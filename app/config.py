@@ -38,6 +38,10 @@ class Settings:
     EXCEL_FAST_PATH: bool = os.getenv("EXCEL_FAST_PATH", "true").lower() == "true"
     # After Excel filter, use a small LLM to speak with conversation awareness
     EXCEL_SPEAK_LLM: bool = os.getenv("EXCEL_SPEAK_LLM", "true").lower() == "true"
+    # CIMMYT interview demo forecasts (Babuganj 44mm/>35C, Rangpur 10mm)
+    DEMO_FORECAST_ENABLED: bool = (
+        os.getenv("DEMO_FORECAST_ENABLED", "true").lower() == "true"
+    )
 
     # TTS: use "edge" for Bangladeshi Bangla (bn-BD), or "openai" for OpenAI voices
     TTS_PROVIDER: str = os.getenv("TTS_PROVIDER", "edge")

@@ -20,7 +20,9 @@ WEATHER_MARKERS = (
     "বৃষ্টি",
     "তাপমাত্রা",
     "weather",
+    "weather advisory",
     "rain",
+    "rainfall",
     "ইউকে",  # STT garble for আবহাওয়া-ish
 )
 
@@ -31,6 +33,10 @@ MORE_MARKERS = (
     "অতিরিক্ত",
     "আরো",
     "অন্যান্য",
+    "other information",
+    "any other",
+    "more information",
+    "more advice",
 )
 
 PEST_MARKERS = (
@@ -124,7 +130,21 @@ def detect_intent(user_message: str) -> str:
 
     if any(m in text or m in lowered for m in WEATHER_MARKERS):
         # Mixed weather + crop care
-        if any(m in text for m in ("ধান", "করণীয়", "করতে", "পরামর্শ", "কুশি", "কষি")):
+        if any(
+            m in text or m in lowered
+            for m in (
+                "ধান",
+                "আমন",
+                "rice",
+                "farmer",
+                "করণীয়",
+                "করতে",
+                "পরামর্শ",
+                "কুশি",
+                "কষি",
+                "advisory",
+            )
+        ):
             return "weather_crop"
         return "weather"
 

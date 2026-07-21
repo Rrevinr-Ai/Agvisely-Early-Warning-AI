@@ -6,6 +6,7 @@ from openai import OpenAI
 
 from app.config import settings
 from app.services.agvisely_service import agvisely_service
+from app.services.demo_forecast_service import default_stage_for_location, lookup_demo_forecast
 from app.services.dialog_service import (
     detect_intent,
     load_dialog_state,
@@ -175,6 +176,82 @@ class CallAgentService:
                 farmer_context["crop_stage"] = stage
                 return
 
+    async def _wheat_fast_path(
+        self,
+        user_message: str,
+        messages: list[dict],
+        farmer_context: dict,
+        dialog_state: dict,
+        intent: str,
+    ) -> tuple[str, list[dict], str] | None:
+        text = user_message or ""
+        lowered = text.lower()
+        is_wheat = (
+            detect_crop_from_text(text) == "wheat"
+            or "wheat" in lowered
+            or "গম" in text
+        )
+        if not is_wheat:
+            return None
+        asks = any(
+            m in text or m in lowered
+            for m in (
+                "advisory",
+                "পরামর্শ",
+                "cultivate",
+                "চাষ",
+                "রোগ",
+                "disease",
+                "blast",
+                "rust",
+                "মরিচা",
+                "ব্লাস্ট",
+                "upcoming",
+                "মৌসুম",
+            )
+        )
+        if not asks and intent not in {"general_crop", "pest", "conversation"}:
+            return None
+
+        data = get_wheat_disease_advisory()
+        bullets = [
+            {"id": "wheat-general", "text": data.get("general_advisory_bn", "")},
+            {"id": "wheat-varieties", "text": data.get("varieties_priority_bn", "")},
+        ]
+        for disease in data.get("diseases") or []:
+            bullets.append(
+                {
+                    "id": f"wheat-{disease.get('name')}",
+                    "text": (
+                        f"{disease.get('name_bn') or disease.get('name')}: "
+                        f"{disease.get('advisory_bn', '')}"
+                    ),
+                }
+            )
+
+        speech = speak_service.speak(
+            user_message=user_message,
+            intent="wheat_disease",
+            constraints=[],
+            crop="গম",
+            stage="pre-season",
+            bullets=[b for b in bullets if b["text"]],
+            recent=recent_conversation_snippets(messages, limit=4),
+            weather_summary=None,
+            location_label=resolve_location(
+                district=farmer_context.get("district"),
+                upazila=farmer_context.get("upazila"),
+            ).get("label"),
+        )
+        if not speech:
+            speech = data.get("agent_speech") or data.get("general_advisory_bn") or ""
+
+        dialog_state["crop"] = "wheat"
+        dialog_state["last_intent"] = "disease"
+        upsert_dialog_state_message(messages, dialog_state)
+        messages.append({"role": "assistant", "content": speech})
+        return speech, messages, "disease"
+
     async def _excel_fast_path(
         self,
         user_message: str,
@@ -188,8 +265,17 @@ class CallAgentService:
             return None
 
         # Pure weather without crop context → let main agent / weather tool handle
+        # (unless interview demo location implies aman rice stage)
+        demo_stage = default_stage_for_location(
+            district=farmer_context.get("district"),
+            upazila=farmer_context.get("upazila"),
+        )
         if intent == "weather" and not (
-            dialog_state.get("crop") or dialog_state.get("stage") or _needs_crop_advisory(user_message)
+            dialog_state.get("crop")
+            or dialog_state.get("stage")
+            or demo_stage
+            or _needs_crop_advisory(user_message)
+            or detect_crop_from_text(user_message)
         ):
             return None
 
@@ -199,6 +285,7 @@ class CallAgentService:
             "constraint",
             "pest",
             "weather_crop",
+            "weather",
         } and not _needs_crop_advisory(user_message):
             return None
 
@@ -211,11 +298,23 @@ class CallAgentService:
             farmer_context.get("crop_stage")
             or dialog_state.get("stage")
             or detect_stage_from_text(user_message)
+            or demo_stage
         )
         if not crop and not stage:
             return None
         if not crop:
             crop = "aman rice"
+
+        wants_wx = (
+            intent in {"weather", "weather_crop"}
+            or _wants_weather(user_message)
+            or bool(
+                lookup_demo_forecast(
+                    district=farmer_context.get("district"),
+                    upazila=farmer_context.get("upazila"),
+                )
+            )
+        )
 
         advisory = await agvisely_service.get_crop_advisory(
             crop=crop,
@@ -224,27 +323,45 @@ class CallAgentService:
             latitude=farmer_context.get("latitude"),
             longitude=farmer_context.get("longitude"),
             stage=stage,
-            include_weather=False,
+            include_weather=wants_wx,
         )
         if advisory.get("source") != "excel":
             return None
 
         constraints = list(dialog_state.get("farmer_constraints") or [])
         said_ids = list(dialog_state.get("said_bullet_ids") or [])
-        filter_intent = intent if intent != "weather_crop" else "weather_crop"
-        max_bullets = 3 if intent in {"weather", "weather_crop"} else 6
+        filter_intent = "weather_crop" if intent in {"weather", "weather_crop"} else intent
+        max_bullets = 4 if filter_intent == "weather_crop" else 6
 
-        picked = excel_advisory_service.select_bullets_for_dialog(
-            advisory,
-            intent=filter_intent,
-            constraints=constraints,
-            said_bullet_ids=said_ids,
-            max_bullets=max_bullets,
-        )
+        # Prefer matched weather advisories for weather questions
+        if filter_intent == "weather_crop" and advisory.get("weather_advisory_bn"):
+            weather_bullets = [
+                {"id": excel_advisory_service.bullet_id(t), "text": t}
+                for t in advisory.get("weather_advisory_bn") or []
+            ]
+            gap_picked = excel_advisory_service.select_bullets_for_dialog(
+                advisory,
+                intent="more_advice",
+                constraints=constraints,
+                said_bullet_ids=said_ids,
+                max_bullets=2,
+            )
+            picked = weather_bullets + [
+                b for b in gap_picked if b["id"] not in {w["id"] for w in weather_bullets}
+            ]
+            picked = picked[:max_bullets]
+        else:
+            picked = excel_advisory_service.select_bullets_for_dialog(
+                advisory,
+                intent=filter_intent,
+                constraints=constraints,
+                said_bullet_ids=said_ids,
+                max_bullets=max_bullets,
+            )
 
         weather_summary = None
-        if intent in {"weather", "weather_crop"} or _wants_weather(user_message):
-            weather = await agvisely_service.get_weather(
+        if wants_wx:
+            weather = advisory.get("weather") or await agvisely_service.get_weather(
                 latitude=farmer_context.get("latitude"),
                 longitude=farmer_context.get("longitude"),
                 district=farmer_context.get("district"),
@@ -259,6 +376,10 @@ class CallAgentService:
             if weather.get("temperature"):
                 weather_summary = (
                     f"তাপমাত্রা {weather.get('temperature')}. " + (weather_summary or "")
+                ).strip()
+            if weather.get("rainfall_mm") is not None:
+                weather_summary = (
+                    f"{weather_summary} বৃষ্টি প্রায় {weather.get('rainfall_mm')} মিমি/দিন।"
                 ).strip()
 
         location = resolve_location(
@@ -430,6 +551,13 @@ class CallAgentService:
 
         self._sync_farmer_context(messages, farmer_context)
         messages.append({"role": "user", "content": user_message})
+
+        # Scenario 2: wheat pre-season disease advisory (fast)
+        wheat_fast = await self._wheat_fast_path(
+            user_message, messages, farmer_context, dialog_state, intent
+        )
+        if wheat_fast is not None:
+            return wheat_fast
 
         # Conversation-aware Excel path (filter + speak).
         fast = await self._excel_fast_path(

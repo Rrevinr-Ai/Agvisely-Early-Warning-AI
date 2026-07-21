@@ -3,6 +3,7 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.services.demo_forecast_service import lookup_demo_forecast
 from app.services.excel_advisory_service import excel_advisory_service
 from app.services.gpt_backup_service import gpt_backup_service
 
@@ -138,6 +139,16 @@ class AgviselyService:
         district: Optional[str] = None,
         upazila: Optional[str] = None,
     ) -> dict:
+        # Interview/pilot demo forecasts take priority when enabled
+        if settings.DEMO_FORECAST_ENABLED:
+            demo = lookup_demo_forecast(district=district, upazila=upazila)
+            if demo:
+                if latitude is not None:
+                    demo["latitude"] = latitude
+                if longitude is not None:
+                    demo["longitude"] = longitude
+                return demo
+
         if not self._is_configured():
             return await self._weather_fallback(district, upazila, latitude, longitude)
 
@@ -171,7 +182,13 @@ class AgviselyService:
         include_weather: bool = False,
     ) -> dict:
         # Preferred path: Excel matrix → GPT fallback (2-tier selection).
+        # When demo forecasts exist for the location, always pull weather so Excel thresholds match.
         if settings.EXCEL_ADVISORY_ENABLED:
+            use_weather = include_weather
+            if settings.DEMO_FORECAST_ENABLED and lookup_demo_forecast(
+                district=district, upazila=upazila
+            ):
+                use_weather = True
             return await self._excel_then_gpt_advisory(
                 crop=crop,
                 district=district,
@@ -179,7 +196,7 @@ class AgviselyService:
                 latitude=latitude,
                 longitude=longitude,
                 stage=stage,
-                include_weather=include_weather,
+                include_weather=use_weather,
             )
 
         if not self._is_configured():

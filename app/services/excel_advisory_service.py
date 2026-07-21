@@ -132,8 +132,11 @@ def detect_crop_from_text(text: str) -> Optional[str]:
         ("আমন ধান", "aman rice"),
         ("আমন", "aman rice"),
         ("aman rice", "aman rice"),
+        ("rice farmer", "aman rice"),
         ("ধান", "aman rice"),
         ("rice", "aman rice"),
+        ("wheat", "wheat"),
+        ("গম", "wheat"),
     )
     for marker, crop in markers:
         if marker in text or marker in lowered:

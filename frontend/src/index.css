@@ -501,6 +501,61 @@ button.secondary.danger {
   color: #d92d20;
 }
 
+.advisory-result {
+  margin-top: 12px;
+}
+
+.advisory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.source-badge,
+.stage-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.source-badge.source-excel {
+  background: #dcfae6;
+  color: var(--success);
+}
+
+.source-badge.source-gpt_backup {
+  background: #fff4d6;
+  color: #b54708;
+}
+
+.stage-badge {
+  background: #edf7ee;
+  color: var(--primary-dark);
+}
+
+.muted-line {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.raw-details {
+  margin-top: 16px;
+}
+
+.raw-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.raw-details pre {
+  margin-top: 10px;
+}
+
 @media (max-width: 720px) {
   .header {
     flex-direction: column;
