@@ -1,7 +1,7 @@
 name: Deploy
 
-# 1) Build & push Docker images to GHCR
-# 2) SSH into VPS and pull / restart containers
+# 1) Build & push Docker images to GHCR (optional registry backup)
+# 2) SSH into VPS → git pull + PM2 reload (ports 9603 / 9604)
 on:
   workflow_run:
     workflows: [CI]
@@ -25,9 +25,6 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push')
-    outputs:
-      backend_image: ${{ steps.names.outputs.backend }}
-      frontend_image: ${{ steps.names.outputs.frontend }}
 
     steps:
       - name: Checkout
@@ -40,12 +37,8 @@ jobs:
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           REPO=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
-          BACKEND="${{ env.REGISTRY }}/${OWNER}/${REPO}-backend"
-          FRONTEND="${{ env.REGISTRY }}/${OWNER}/${REPO}-frontend"
-          echo "BACKEND_IMAGE=${BACKEND}" >> "$GITHUB_ENV"
-          echo "FRONTEND_IMAGE=${FRONTEND}" >> "$GITHUB_ENV"
-          echo "backend=${BACKEND}" >> "$GITHUB_OUTPUT"
-          echo "frontend=${FRONTEND}" >> "$GITHUB_OUTPUT"
+          echo "BACKEND_IMAGE=${{ env.REGISTRY }}/${OWNER}/${REPO}-backend" >> "$GITHUB_ENV"
+          echo "FRONTEND_IMAGE=${{ env.REGISTRY }}/${OWNER}/${REPO}-frontend" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -98,14 +91,14 @@ jobs:
           cache-to: type=gha,mode=max
 
   restart-server:
-    name: Deploy to VPS
+    name: Deploy to VPS (PM2)
     needs: deploy
     runs-on: ubuntu-latest
     # Set repo variable ENABLE_VPS_DEPLOY=true after secrets are added
     if: ${{ vars.ENABLE_VPS_DEPLOY == 'true' }}
 
     steps:
-      - name: Deploy over SSH
+      - name: Deploy over SSH (git pull + PM2)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -115,16 +108,6 @@ jobs:
           port: 22
           script: |
             set -e
-            cd ${{ env.DEPLOY_PATH }}
-
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
-
-            export BACKEND_IMAGE="${{ needs.deploy.outputs.backend_image }}:latest"
-            export FRONTEND_IMAGE="${{ needs.deploy.outputs.frontend_image }}:latest"
-
-            docker compose pull
-            docker compose up -d --remove-orphans
-            docker image prune -f
-
-            echo "Deploy finished."
-            docker compose ps
+            export DEPLOY_PATH="${{ env.DEPLOY_PATH }}"
+            cd "$DEPLOY_PATH"
+            bash deploy/pm2-deploy.sh

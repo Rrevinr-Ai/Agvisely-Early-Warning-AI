@@ -247,98 +247,61 @@ docker compose up --build
 - Frontend: http://127.0.0.1:9604  
 - API docs: http://127.0.0.1:9603/docs  
 
-#### 7. Deploy to your VPS (full process)
+#### 7. Deploy to your VPS with PM2 (recommended)
 
-Files live in `deploy/`:
+App runs under **PM2** on the server:
 
-| File | On VPS |
-|------|--------|
-| `deploy/docker-compose.yml` | `/opt/agvisely/docker-compose.yml` |
-| `deploy/.env.example` | `/opt/agvisely/.env` (edit secrets) |
+| Process | Port |
+|---------|------|
+| `agvisely-backend` (uvicorn) | **9603** |
+| `agvisely-frontend` (serve) | **9604** |
 
-##### A. Prepare the server (once)
-
-```bash
-ssh YOUR_USER@YOUR_VPS_IP
-sudo mkdir -p /opt/agvisely
-sudo chown $USER:$USER /opt/agvisely
-```
-
-From your laptop:
+##### A. One-time server setup
 
 ```bash
-scp deploy/docker-compose.yml YOUR_USER@YOUR_VPS_IP:/opt/agvisely/docker-compose.yml
-scp deploy/.env.example YOUR_USER@YOUR_VPS_IP:/opt/agvisely/.env
-```
-
-On the VPS:
-
-```bash
-nano /opt/agvisely/.env
-# set POSTGRES_PASSWORD, OPENAI_API_KEY, PUBLIC_BASE_URL=http://YOUR_VPS_IP:9603
-
-# Install Docker if needed: https://docs.docker.com/engine/install/
-sudo ufw allow 9603/tcp
-sudo ufw allow 9604/tcp
-sudo ufw allow OpenSSH
-```
-
-##### B. First pull & start
-
-Create a GitHub PAT with `read:packages`, then on the VPS:
-
-```bash
-echo YOUR_PAT | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+ssh root@YOUR_VPS_IP
+# copy and run, or:
+git clone https://github.com/Rrevinr-Ai/Agvisely-Early-Warning-AI.git /opt/agvisely
 cd /opt/agvisely
-docker compose pull
-docker compose up -d
+bash deploy/pm2-setup.sh
+nano /opt/agvisely/.env   # DATABASE_URL, OPENAI_API_KEY, PUBLIC_BASE_URL, ...
+pm2 restart all
 ```
 
 - Backend: `http://YOUR_VPS_IP:9603`
 - Frontend: `http://YOUR_VPS_IP:9604`
-- Docs: `http://YOUR_VPS_IP:9603/docs`
 
-##### C. SSH key for GitHub Actions
+Useful PM2 commands:
 
 ```bash
-ssh-keygen -t ed25519 -C "github-actions-deploy" -f agvisely-deploy -N ""
-ssh-copy-id -i agvisely-deploy.pub YOUR_USER@YOUR_VPS_IP
+pm2 status
+pm2 logs agvisely-backend
+pm2 logs agvisely-frontend
+pm2 restart all
 ```
 
-##### D. GitHub Secrets & variable
+##### B. GitHub Actions → auto deploy (PM2)
 
-Repo → **Settings** → **Secrets and variables** → **Actions**
+After each green CI on `main`, the **Deploy to VPS (PM2)** job SSHs in and runs `deploy/pm2-deploy.sh` (`git pull` → pip/npm → `pm2 startOrReload`).
 
-**Secrets**
-
-| Name | Value |
-|------|--------|
-| `DEPLOY_HOST` | VPS IP or hostname |
-| `DEPLOY_USER` | SSH username |
-| `DEPLOY_SSH_KEY` | Full private key (e.g. contents of `~/.ssh/id_ed25519`) |
-| `DEPLOY_SSH_PASSPHRASE` | Passphrase for that private key (leave empty secret if none) |
-| `GHCR_USERNAME` | GitHub username |
-| `GHCR_TOKEN` | PAT with `read:packages` |
-
-**Variables** tab:
+**Secrets** (Settings → Secrets → Actions):
 
 | Name | Value |
 |------|--------|
-| `ENABLE_VPS_DEPLOY` | `true` |
+| `DEPLOY_HOST` | VPS IP |
+| `DEPLOY_USER` | SSH user (e.g. `root`) |
+| `DEPLOY_SSH_KEY` | Private SSH key |
+| `DEPLOY_SSH_PASSPHRASE` | Key passphrase (if any) |
 
-##### E. Auto-deploy
+**Variable**: `ENABLE_VPS_DEPLOY` = `true`
 
-Push to `main` → CI → Deploy (build images) → **Deploy to VPS** (`docker compose pull && up -d`).
+(Docker images are still pushed to GHCR as a backup; the live VPS path is PM2.)
 
-Or: **Actions** → **Deploy** → **Run workflow**.
-
-##### F. Server commands
+##### C. Manual deploy on server
 
 ```bash
 cd /opt/agvisely
-docker compose ps
-docker compose logs -f backend
-docker compose restart
+bash deploy/pm2-deploy.sh
 ```
 
 ---
