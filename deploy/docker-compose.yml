@@ -1,0 +1,44 @@
+# Production stack for VPS — pulls images from GitHub Container Registry.
+# Place this file on the server at: /opt/agvisely/docker-compose.yml
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-service_agent}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Do not publish Postgres to the public internet
+
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/rrevinr-ai/agvisely-early-warning-ai-backend:latest}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-service_agent}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:9603}
+    ports:
+      - "9603:9603"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-ghcr.io/rrevinr-ai/agvisely-early-warning-ai-frontend:latest}
+    restart: unless-stopped
+    ports:
+      - "9604:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

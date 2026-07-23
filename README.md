@@ -247,23 +247,97 @@ docker compose up --build
 - Frontend: http://127.0.0.1:9604  
 - API docs: http://127.0.0.1:9603/docs  
 
-#### 7. Optional: deploy to a VPS after image push
+#### 7. Deploy to your VPS (full process)
 
-1. In `.github/workflows/deploy.yml`, uncomment the `restart-server` job.
-2. Repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
+Files live in `deploy/`:
 
-| Secret | Meaning |
-|--------|---------|
-| `DEPLOY_HOST` | Server IP or hostname |
-| `DEPLOY_USER` | SSH user |
-| `DEPLOY_SSH_KEY` | Private SSH key |
+| File | On VPS |
+|------|--------|
+| `deploy/docker-compose.yml` | `/opt/agvisely/docker-compose.yml` |
+| `deploy/.env.example` | `/opt/agvisely/.env` (edit secrets) |
 
-3. On the server, use `docker compose` that pulls from GHCR and maps **9603** / **9604**.
-
-### GitHub Packages login (private images)
+##### A. Prepare the server (once)
 
 ```bash
-echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+ssh YOUR_USER@YOUR_VPS_IP
+sudo mkdir -p /opt/agvisely
+sudo chown $USER:$USER /opt/agvisely
+```
+
+From your laptop:
+
+```bash
+scp deploy/docker-compose.yml YOUR_USER@YOUR_VPS_IP:/opt/agvisely/docker-compose.yml
+scp deploy/.env.example YOUR_USER@YOUR_VPS_IP:/opt/agvisely/.env
+```
+
+On the VPS:
+
+```bash
+nano /opt/agvisely/.env
+# set POSTGRES_PASSWORD, OPENAI_API_KEY, PUBLIC_BASE_URL=http://YOUR_VPS_IP:9603
+
+# Install Docker if needed: https://docs.docker.com/engine/install/
+sudo ufw allow 9603/tcp
+sudo ufw allow 9604/tcp
+sudo ufw allow OpenSSH
+```
+
+##### B. First pull & start
+
+Create a GitHub PAT with `read:packages`, then on the VPS:
+
+```bash
+echo YOUR_PAT | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+cd /opt/agvisely
+docker compose pull
+docker compose up -d
+```
+
+- Backend: `http://YOUR_VPS_IP:9603`
+- Frontend: `http://YOUR_VPS_IP:9604`
+- Docs: `http://YOUR_VPS_IP:9603/docs`
+
+##### C. SSH key for GitHub Actions
+
+```bash
+ssh-keygen -t ed25519 -C "github-actions-deploy" -f agvisely-deploy -N ""
+ssh-copy-id -i agvisely-deploy.pub YOUR_USER@YOUR_VPS_IP
+```
+
+##### D. GitHub Secrets & variable
+
+Repo → **Settings** → **Secrets and variables** → **Actions**
+
+**Secrets**
+
+| Name | Value |
+|------|--------|
+| `DEPLOY_HOST` | VPS IP or hostname |
+| `DEPLOY_USER` | SSH username |
+| `DEPLOY_SSH_KEY` | Full private key file `agvisely-deploy` |
+| `GHCR_USERNAME` | GitHub username |
+| `GHCR_TOKEN` | PAT with `read:packages` |
+
+**Variables** tab:
+
+| Name | Value |
+|------|--------|
+| `ENABLE_VPS_DEPLOY` | `true` |
+
+##### E. Auto-deploy
+
+Push to `main` → CI → Deploy (build images) → **Deploy to VPS** (`docker compose pull && up -d`).
+
+Or: **Actions** → **Deploy** → **Run workflow**.
+
+##### F. Server commands
+
+```bash
+cd /opt/agvisely
+docker compose ps
+docker compose logs -f backend
+docker compose restart
 ```
 
 ---

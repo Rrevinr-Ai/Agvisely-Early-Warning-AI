@@ -1,7 +1,7 @@
 name: Deploy
 
-# Builds Docker images and pushes them to GitHub Container Registry (GHCR).
-# Runs after CI succeeds on main/master, or when you manually trigger it.
+# 1) Build & push Docker images to GHCR
+# 2) SSH into VPS and pull / restart containers
 on:
   workflow_run:
     workflows: [CI]
@@ -15,6 +15,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
+  DEPLOY_PATH: /opt/agvisely
 
 jobs:
   deploy:
@@ -24,6 +25,9 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push')
+    outputs:
+      backend_image: ${{ steps.names.outputs.backend }}
+      frontend_image: ${{ steps.names.outputs.frontend }}
 
     steps:
       - name: Checkout
@@ -32,11 +36,16 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Lowercase image names (GHCR requires lowercase)
+        id: names
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           REPO=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
-          echo "BACKEND_IMAGE=${{ env.REGISTRY }}/${OWNER}/${REPO}-backend" >> "$GITHUB_ENV"
-          echo "FRONTEND_IMAGE=${{ env.REGISTRY }}/${OWNER}/${REPO}-frontend" >> "$GITHUB_ENV"
+          BACKEND="${{ env.REGISTRY }}/${OWNER}/${REPO}-backend"
+          FRONTEND="${{ env.REGISTRY }}/${OWNER}/${REPO}-frontend"
+          echo "BACKEND_IMAGE=${BACKEND}" >> "$GITHUB_ENV"
+          echo "FRONTEND_IMAGE=${FRONTEND}" >> "$GITHUB_ENV"
+          echo "backend=${BACKEND}" >> "$GITHUB_OUTPUT"
+          echo "frontend=${FRONTEND}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -88,22 +97,33 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Optional: pull images on a VPS via SSH and restart containers.
-  # Uncomment and add secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY
-  #
-  # restart-server:
-  #   name: Restart on server
-  #   needs: deploy
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Deploy over SSH
-  #       uses: appleboy/ssh-action@v1.2.0
-  #       with:
-  #         host: ${{ secrets.DEPLOY_HOST }}
-  #         username: ${{ secrets.DEPLOY_USER }}
-  #         key: ${{ secrets.DEPLOY_SSH_KEY }}
-  #         script: |
-  #           cd /opt/agvisely
-  #           echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-  #           docker compose pull
-  #           docker compose up -d
+  restart-server:
+    name: Deploy to VPS
+    needs: deploy
+    runs-on: ubuntu-latest
+    # Set repo variable ENABLE_VPS_DEPLOY=true after secrets are added
+    if: ${{ vars.ENABLE_VPS_DEPLOY == 'true' }}
+
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+            cd ${{ env.DEPLOY_PATH }}
+
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+
+            export BACKEND_IMAGE="${{ needs.deploy.outputs.backend_image }}:latest"
+            export FRONTEND_IMAGE="${{ needs.deploy.outputs.frontend_image }}:latest"
+
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker image prune -f
+
+            echo "Deploy finished."
+            docker compose ps
