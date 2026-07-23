@@ -2,7 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker,declarative_base
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 load_dotenv()
 
@@ -20,7 +20,7 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(
-    autocommit=False, 
+    autocommit=False,
     autoflush=False,
     bind=engine
 )
@@ -32,4 +32,4 @@ def get_db():
     try:
         yield db
     finally:
-        db.close()  
+        db.close()
