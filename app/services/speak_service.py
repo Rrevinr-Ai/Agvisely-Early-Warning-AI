@@ -1,25 +1,74 @@
-"""Short Bangla speak step after Excel bullet filter (no tools)."""
+"""Short Bangla speak step after advisory bullet filter (no tools)."""
 
 from __future__ import annotations
 
-from typing import Any, Optional
+import re
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
 from openai import OpenAI
 
 from app.config import settings
 
-SPEAK_SYSTEM = (
-    "You are a Bangla-speaking krishi extension officer on a phone call. "
-    "Reply in natural spoken Bangla only (4-7 short sentences). "
-    "Use ONLY the provided Excel advisory bullets as facts. "
-    "If Constraints include no_money_for_soil_test: "
-    "NEVER tell them to do মাটি পরীক্ষা; NEVER say they must spend money on soil testing. "
-    "Explicitly say মাটি পরীক্ষা ছাড়াই চলবে and recommend লিফ কালার চার্ট (এলসিসি) and/or "
-    "গুটি ইউরিয়া / পরিমিত ইউরিয়া from the bullets. "
-    "Do not repeat points already covered in recent conversation. "
-    "Do not invent new pesticides or fertilizers not in the bullets. "
-    "If weather summary is provided, mention it briefly first."
+_RULES_PATH = Path(__file__).resolve().parents[1] / "prompts" / "krishibid_rules.txt"
+
+_LEAK_PATTERNS = (
+    re.compile(r"(?i)knowledge\s*base"),
+    re.compile(r"(?i)\bexcel\b"),
+    re.compile(r"(?i)\brag\b"),
+    re.compile(r"(?i)vector\s*database"),
+    re.compile(r"(?i)\bgpt\b"),
+    re.compile(r"(?i)database"),
+    re.compile(r"নলেজ\s*বেস"),
+    re.compile(r"ভেরিফাইড\s*পরামর্শ\s*নেই"),
+    re.compile(r"সাধারণ\s*কৃষিবিদ্যাভিত্তিক"),
+    re.compile(r"তথ্য\s*নেই"),
+    re.compile(r"unavailable", re.I),
 )
+
+
+def _load_krishibid_rules() -> str:
+    try:
+        return _RULES_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+SPEAK_SYSTEM = (
+    (_load_krishibid_rules() + "\n\n" if _RULES_PATH.exists() else "")
+    + "PHONE REPLY MODE:\n"
+    "Reply in natural spoken Bangla. Prefer the section structure from the rules "
+    "(আবহাওয়া → ফসল → ঝুঁকি → কী করবেন → কখন → কেন → অতিরিক্ত), "
+    "compressed for a phone call.\n"
+    "Internal context uses advisory_source=verified|general — NEVER say these words to the farmer.\n"
+    "If advisory_source=verified: use the provided advisory bullets as facts; do not contradict.\n"
+    "If advisory_source=general or bullets empty: give practical weather-aware agronomic advice "
+    "from crop + weather + season + location + stage. Do not mention missing data.\n"
+    "Never mention Knowledge Base, Excel, Database, RAG, GPT, AI, or internal systems.\n"
+    "If Constraints include no_money_for_soil_test: "
+    "NEVER insist on মাটি পরীক্ষা; say মাটি পরীক্ষা ছাড়াই চলবে and recommend "
+    "লিফ কালার চার্ট (এলসিসি) and/or গুটি ইউরিয়া / পরিমিত ইউরিয়া when relevant.\n"
+    "Do not repeat points already covered in recent conversation.\n"
+    "When verified bullets exist, do not invent pesticides/fertilizers not in those bullets.\n"
+    "Weather safety: no fertilizer/spray before or during heavy rain; suggest safest timing.\n"
+    "If weather summary is provided, start with আবহাওয়ার বিশ্লেষণ."
+)
+
+
+def sanitize_farmer_speech(text: str) -> str:
+    """Strip accidental internal/leak lines from farmer-facing text."""
+    if not text:
+        return text
+    kept: list[str] = []
+    for line in text.splitlines():
+        if any(p.search(line) for p in _LEAK_PATTERNS):
+            continue
+        kept.append(line)
+    cleaned = "\n".join(kept).strip()
+    # Collapse leftover blank lines
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned or text.strip()
 
 
 class SpeakService:
@@ -39,6 +88,8 @@ class SpeakService:
         recent: list[dict],
         weather_summary: Optional[str] = None,
         location_label: Optional[str] = None,
+        advisory_source: Optional[str] = None,
+        knowledge_source: Optional[str] = None,  # backward-compatible alias
     ) -> Optional[str]:
         if not settings.EXCEL_SPEAK_LLM or not self.client:
             return None
@@ -49,17 +100,27 @@ class SpeakService:
         history_lines = "\n".join(
             f"{m.get('role')}: {m.get('content')}" for m in (recent or [])[-6:]
         )
+        source = advisory_source or knowledge_source
+        if not source:
+            source = "verified" if bullets else "general"
+        if source in {"excel", "cimmyt"}:
+            source = "verified"
+
         prompt = (
-            f"Location: {location_label or 'Bangladesh'}\n"
-            f"Crop: {crop}\n"
-            f"Stage: {stage}\n"
-            f"Intent: {intent}\n"
-            f"Constraints: {', '.join(constraints) or 'none'}\n"
-            f"Farmer just said: {user_message}\n\n"
+            f"Current datetime (Asia/Dhaka): "
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+            f"crop: {crop}\n"
+            f"location: {location_label or 'Bangladesh'}\n"
+            f"stage: {stage or 'unknown'}\n"
+            f"intent: {intent}\n"
+            f"advisory_source: {source}\n"
+            f"constraints: {', '.join(constraints) or 'none'}\n"
+            f"Farmer said: {user_message}\n\n"
             f"Recent conversation:\n{history_lines or '(none)'}\n\n"
-            f"Weather note (optional):\n{weather_summary or '(none)'}\n\n"
-            f"Excel advisory bullets to use:\n{bullet_lines or '(none)'}\n\n"
-            "Write the phone reply now in Bangla."
+            f"weather:\n{weather_summary or '(none)'}\n\n"
+            f"advisory:\n{bullet_lines or 'null'}\n\n"
+            "Write the Krishibid phone reply in Bangla. "
+            "Never mention advisory_source or any internal system."
         )
         try:
             response = self.client.chat.completions.create(
@@ -68,11 +129,11 @@ class SpeakService:
                     {"role": "system", "content": SPEAK_SYSTEM},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.4,
-                max_tokens=280,
+                temperature=0.35,
+                max_tokens=520,
             )
             text = (response.choices[0].message.content or "").strip()
-            return text or None
+            return sanitize_farmer_speech(text) if text else None
         except Exception:
             return None
 

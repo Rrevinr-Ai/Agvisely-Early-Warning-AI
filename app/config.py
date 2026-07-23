@@ -39,9 +39,19 @@ class Settings:
     # After Excel filter, use a small LLM to speak with conversation awareness
     EXCEL_SPEAK_LLM: bool = os.getenv("EXCEL_SPEAK_LLM", "true").lower() == "true"
     # CIMMYT interview demo forecasts (Babuganj 44mm/>35C, Rangpur 10mm)
+    # Default false → use live Open-Meteo / Agvisely instead of static scenario numbers.
     DEMO_FORECAST_ENABLED: bool = (
-        os.getenv("DEMO_FORECAST_ENABLED", "true").lower() == "true"
+        os.getenv("DEMO_FORECAST_ENABLED", "false").lower() == "true"
     )
+    # Live weather (Open-Meteo) when Agvisely API is not configured
+    LIVE_WEATHER_ENABLED: bool = (
+        os.getenv("LIVE_WEATHER_ENABLED", "true").lower() == "true"
+    )
+    LIVE_WEATHER_API_URL: str = os.getenv(
+        "LIVE_WEATHER_API_URL",
+        "https://api.open-meteo.com/v1/forecast",
+    )
+    LIVE_WEATHER_TIMEOUT: float = float(os.getenv("LIVE_WEATHER_TIMEOUT", "5"))
 
     # TTS: use "edge" for Bangladeshi Bangla (bn-BD), or "openai" for OpenAI voices
     TTS_PROVIDER: str = os.getenv("TTS_PROVIDER", "edge")

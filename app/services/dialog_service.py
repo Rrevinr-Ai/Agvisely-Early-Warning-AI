@@ -32,6 +32,9 @@ MORE_MARKERS = (
     "আরও",
     "অতিরিক্ত",
     "আরো",
+    "আর কোনো",
+    "আর কিছু",
+    "অন্য কিছু",
     "অন্যান্য",
     "other information",
     "any other",
@@ -164,8 +167,12 @@ def detect_intent(user_message: str) -> str:
         for m in (
             "ধান",
             "আমন",
+            "পাট",
+            "পাঠ",
+            "জুট",
             "পরামর্শ",
             "করতে",
+            "করণীয়",
             "কুশি",
             "কষি",
             "কুষি",
@@ -199,12 +206,27 @@ def update_dialog_state_from_turn(
     state.setdefault("said_bullet_ids", [])
     state.setdefault("farmer_constraints", [])
 
-    stage = detect_stage_from_text(user_message) or farmer_context.get("crop_stage")
+    stage = detect_stage_from_text(user_message)
     if stage:
         state["stage"] = stage
-    crop = detect_crop_from_text(user_message) or farmer_context.get("preferred_crop")
+
+    crop = detect_crop_from_text(user_message)
     if crop:
         state["crop"] = crop
+        # পাট/পাঠ must not inherit rice কুশি/থোড় from form/session
+        if crop == "jute" and not stage:
+            if state.get("stage") in {"Maximum Tillering Stage", "Booting Stage"}:
+                state["stage"] = None
+            farmer_context.pop("crop_stage", None)
+    elif farmer_context.get("preferred_crop"):
+        state["crop"] = farmer_context.get("preferred_crop")
+
+    if (
+        not state.get("stage")
+        and farmer_context.get("crop_stage")
+        and state.get("crop") not in {"jute"}
+    ):
+        state["stage"] = farmer_context.get("crop_stage")
 
     spoken = extract_location_from_message(user_message)
     if spoken.get("district"):

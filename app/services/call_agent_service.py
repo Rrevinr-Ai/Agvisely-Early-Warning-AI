@@ -21,7 +21,7 @@ from app.services.excel_advisory_service import (
     excel_advisory_service,
 )
 from app.services.location_service import resolve_location
-from app.services.speak_service import speak_service
+from app.services.speak_service import sanitize_farmer_speech, speak_service
 
 
 AGENT_TOOLS = [
@@ -152,16 +152,26 @@ class CallAgentService:
         if stage:
             farmer_context["crop_stage"] = stage
         crop = detect_crop_from_text(user_message)
+        if not crop and any(
+            x in (user_message or "") for x in ("পাট", "পাঠ", "জুট", "jute", "Jute")
+        ):
+            crop = "jute"
         if crop:
             farmer_context["preferred_crop"] = crop
+            if crop == "jute":
+                # Do not keep rice stage on jute questions
+                farmer_context.pop("crop_stage", None)
 
     def _recover_stage_from_messages(self, messages: list[dict], farmer_context: dict) -> None:
         if farmer_context.get("crop_stage"):
             return
+        # Spoken/non-rice crop already set for this turn — do not revive rice stage/crop
+        if farmer_context.get("preferred_crop") in {"jute", "wheat", "maize", "potato"}:
+            return
         state = load_dialog_state(messages)
         if state.get("stage"):
             farmer_context["crop_stage"] = state["stage"]
-            if state.get("crop"):
+            if state.get("crop") and not farmer_context.get("preferred_crop"):
                 farmer_context["preferred_crop"] = state["crop"]
             return
         for message in reversed(messages or []):
@@ -242,6 +252,8 @@ class CallAgentService:
                 district=farmer_context.get("district"),
                 upazila=farmer_context.get("upazila"),
             ).get("label"),
+            knowledge_source="cimmyt",
+            advisory_source="verified",
         )
         if not speech:
             speech = data.get("agent_speech") or data.get("general_advisory_bn") or ""
@@ -251,6 +263,99 @@ class CallAgentService:
         upsert_dialog_state_message(messages, dialog_state)
         messages.append({"role": "assistant", "content": speech})
         return speech, messages, "disease"
+
+    async def _general_crop_fast_path(
+        self,
+        user_message: str,
+        messages: list[dict],
+        farmer_context: dict,
+        dialog_state: dict,
+        intent: str,
+    ) -> tuple[str, list[dict], str] | None:
+        """Weather-aware speak for crops without Excel matrix (jute, etc.)."""
+        crop = (
+            detect_crop_from_text(user_message)
+            or dialog_state.get("crop")
+            or farmer_context.get("preferred_crop")
+        )
+        if not crop and any(
+            x in (user_message or "") for x in ("পাট", "পাঠ", "জুট", "jute", "Jute")
+        ):
+            crop = "jute"
+        if crop != "jute":
+            return None
+        if intent not in {
+            "general_crop",
+            "more_advice",
+            "weather",
+            "weather_crop",
+            "pest",
+            "constraint",
+            "conversation",
+        } and not _needs_crop_advisory(user_message):
+            return None
+
+        weather = await agvisely_service.get_weather(
+            latitude=farmer_context.get("latitude"),
+            longitude=farmer_context.get("longitude"),
+            district=farmer_context.get("district"),
+            upazila=farmer_context.get("upazila"),
+        )
+        weather_summary = (
+            weather.get("agent_speech")
+            or weather.get("summary")
+            or weather.get("weather_condition")
+            or ""
+        )
+        if weather.get("temperature_c") is not None:
+            weather_summary = (
+                f"সর্বোচ্চ তাপমাত্রা প্রায় {weather.get('temperature_c')}°সে। "
+                + (weather_summary or "")
+            ).strip()
+        if weather.get("rainfall_mm") is not None:
+            weather_summary = (
+                f"{weather_summary} গড় বৃষ্টি প্রায় {weather.get('rainfall_mm')} মিমি/দিন।"
+            ).strip()
+
+        location = resolve_location(
+            district=farmer_context.get("district"),
+            upazila=farmer_context.get("upazila"),
+            latitude=farmer_context.get("latitude"),
+            longitude=farmer_context.get("longitude"),
+        )
+        # Grown / mature jute cue from speech
+        stage = "বড়/পরিপক্ক পর্যায়" if any(
+            x in (user_message or "") for x in ("বড়", "বরো", "বড়ো", "বড়ো", "বড়")
+        ) else (dialog_state.get("stage") or "বৃদ্ধি পর্যায়")
+
+        speech = speak_service.speak(
+            user_message=user_message,
+            intent=intent,
+            constraints=list(dialog_state.get("farmer_constraints") or []),
+            crop="পাট",
+            stage=stage,
+            bullets=[],
+            recent=recent_conversation_snippets(messages, limit=4),
+            weather_summary=weather_summary,
+            location_label=location.get("label"),
+            advisory_source="general",
+        )
+        if not speech:
+            speech = (
+                f"{weather_summary} "
+                "পাট বড় হয়ে গেলে জমিতে পানি জমতে দেবেন না; নালা খোলা রাখুন। "
+                "বৃষ্টির আগে সার বা স্প্রে করবেন না—বৃষ্টি কমলে পরিচর্যা করুন। "
+                "পাতা/কাণ্ডে দাগ দেখলে স্থানীয় কৃষি কর্মকর্তার পরামর্শ নিন।"
+            ).strip()
+
+        speech = sanitize_farmer_speech(speech)
+        dialog_state["crop"] = "jute"
+        dialog_state["stage"] = None
+        dialog_state["last_intent"] = intent
+        upsert_dialog_state_message(messages, dialog_state)
+        messages.append({"role": "assistant", "content": speech})
+        out_intent = "weather" if intent in {"weather", "weather_crop"} else "advisory"
+        return speech, messages, out_intent
 
     async def _excel_fast_path(
         self,
@@ -264,20 +369,16 @@ class CallAgentService:
         if not settings.EXCEL_FAST_PATH or not settings.EXCEL_ADVISORY_ENABLED:
             return None
 
-        # Pure weather without crop context → let main agent / weather tool handle
-        # (unless interview demo location implies aman rice stage)
+        # Pure weather question → weather tool / agent (don't push form-default rice Excel)
+        if intent == "weather" and not detect_crop_from_text(user_message) and not _needs_crop_advisory(
+            user_message
+        ):
+            return None
+
         demo_stage = default_stage_for_location(
             district=farmer_context.get("district"),
             upazila=farmer_context.get("upazila"),
         )
-        if intent == "weather" and not (
-            dialog_state.get("crop")
-            or dialog_state.get("stage")
-            or demo_stage
-            or _needs_crop_advisory(user_message)
-            or detect_crop_from_text(user_message)
-        ):
-            return None
 
         if intent not in {
             "general_crop",
@@ -289,17 +390,31 @@ class CallAgentService:
         } and not _needs_crop_advisory(user_message):
             return None
 
+        # Spoken crop wins over stale form/dialog (e.g. পাঠ/পাট after aman default)
+        spoken_crop = detect_crop_from_text(user_message)
+        if not spoken_crop and any(
+            x in (user_message or "") for x in ("পাট", "পাঠ", "জুট", "jute", "Jute")
+        ):
+            spoken_crop = "jute"
         crop = (
-            farmer_context.get("preferred_crop")
+            spoken_crop
             or dialog_state.get("crop")
-            or detect_crop_from_text(user_message)
+            or farmer_context.get("preferred_crop")
         )
+        # Jute/other non-Excel crops → main Krishibid agent (weather-aware general advice)
+        if crop and crop not in {"aman rice", "wheat"}:
+            return None
+        if spoken_crop == "jute":
+            return None
+
         stage = (
-            farmer_context.get("crop_stage")
+            detect_stage_from_text(user_message)
+            or farmer_context.get("crop_stage")
             or dialog_state.get("stage")
-            or detect_stage_from_text(user_message)
-            or demo_stage
         )
+        # Demo/interview default stage only for aman rice
+        if not stage and (crop or "aman rice") == "aman rice":
+            stage = demo_stage
         if not crop and not stage:
             return None
         if not crop:
@@ -331,33 +446,17 @@ class CallAgentService:
         constraints = list(dialog_state.get("farmer_constraints") or [])
         said_ids = list(dialog_state.get("said_bullet_ids") or [])
         filter_intent = "weather_crop" if intent in {"weather", "weather_crop"} else intent
-        max_bullets = 4 if filter_intent == "weather_crop" else 6
+        # Weather questions: surface full Excel Temperature/Rainfall tips first
+        max_bullets = 6 if filter_intent == "weather_crop" else 6
 
-        # Prefer matched weather advisories for weather questions
-        if filter_intent == "weather_crop" and advisory.get("weather_advisory_bn"):
-            weather_bullets = [
-                {"id": excel_advisory_service.bullet_id(t), "text": t}
-                for t in advisory.get("weather_advisory_bn") or []
-            ]
-            gap_picked = excel_advisory_service.select_bullets_for_dialog(
-                advisory,
-                intent="more_advice",
-                constraints=constraints,
-                said_bullet_ids=said_ids,
-                max_bullets=2,
-            )
-            picked = weather_bullets + [
-                b for b in gap_picked if b["id"] not in {w["id"] for w in weather_bullets}
-            ]
-            picked = picked[:max_bullets]
-        else:
-            picked = excel_advisory_service.select_bullets_for_dialog(
-                advisory,
-                intent=filter_intent,
-                constraints=constraints,
-                said_bullet_ids=said_ids,
-                max_bullets=max_bullets,
-            )
+        # Prefer matched weather advisories for weather questions (Excel Temperature/Rainfall)
+        picked = excel_advisory_service.select_bullets_for_dialog(
+            advisory,
+            intent=filter_intent,
+            constraints=constraints,
+            said_bullet_ids=said_ids,
+            max_bullets=max_bullets,
+        )
 
         weather_summary = None
         if wants_wx:
@@ -400,6 +499,8 @@ class CallAgentService:
             recent=recent,
             weather_summary=weather_summary,
             location_label=location.get("label"),
+            knowledge_source="excel",
+            advisory_source="verified",
         )
         used_ids = [b["id"] for b in picked]
         if not speech:
@@ -559,12 +660,32 @@ class CallAgentService:
         if wheat_fast is not None:
             return wheat_fast
 
+        # Non-Excel crops (e.g. পাট/পাঠ) — weather-aware Krishibid speak, ignore rice history
+        general_fast = await self._general_crop_fast_path(
+            user_message, messages, farmer_context, dialog_state, intent
+        )
+        if general_fast is not None:
+            return general_fast
+
         # Conversation-aware Excel path (filter + speak).
         fast = await self._excel_fast_path(
             user_message, messages, farmer_context, dialog_state, intent
         )
         if fast is not None:
             return fast
+
+        # If crop switched this turn, keep agent from reusing prior rice advice
+        if farmer_context.get("preferred_crop") == "jute":
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "This turn the farmer's crop is পাট (jute), NOT aman rice. "
+                        "Ignore earlier rice/কুশি/urea advice in this call. "
+                        "Answer only for jute with weather-aware practical tips."
+                    ),
+                }
+            )
 
         for _ in range(5):
             response = self.client.chat.completions.create(
@@ -646,18 +767,22 @@ class CallAgentService:
                         and called_names == ["get_crop_advisory"]
                         and speech
                     ):
+                        speech = sanitize_farmer_speech(speech)
                         messages.append({"role": "assistant", "content": speech})
                         upsert_dialog_state_message(messages, dialog_state)
                         return speech, messages, self._detect_intent(user_message, messages)
 
                 continue
 
-            answer = (assistant_message.content or "").strip()
+            answer = sanitize_farmer_speech((assistant_message.content or "").strip())
             messages.append({"role": "assistant", "content": answer})
             upsert_dialog_state_message(messages, dialog_state)
             return answer, messages, self._detect_intent(user_message, messages)
 
-        fallback = "দুঃখিত, আমি এখন উত্তর দিতে পারছি না। একটু পরে আবার চেষ্টা করুন।"
+        fallback = (
+            "এলাকার আবহাওয়া দেখে নিরাপদ কাজগুলো আগে করুন—বৃষ্টির আগে সার বা স্প্রে না করাই ভালো। "
+            "আরেকটু পরে আবার জিজ্ঞাসা করলে আরও খুঁটিয়ে বলব।"
+        )
         messages.append({"role": "assistant", "content": fallback})
         return fallback, messages, "error"
 

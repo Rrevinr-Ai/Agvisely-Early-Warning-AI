@@ -9,6 +9,11 @@ KNOWN_PLACES: dict[str, dict[str, str]] = {
     "modukhali": {"upazila": "Modhukhali", "district": "Faridpur"},
     "মধুখালি": {"upazila": "Modhukhali", "district": "Faridpur"},
     "মদুখালি": {"upazila": "Modhukhali", "district": "Faridpur"},
+    "মধুখালী": {"upazila": "Modhukhali", "district": "Faridpur"},
+    "মধুকাতি": {"upazila": "Modhukhali", "district": "Faridpur"},  # STT
+    "মধুকালি": {"upazila": "Modhukhali", "district": "Faridpur"},
+    "madhukati": {"upazila": "Modhukhali", "district": "Faridpur"},
+    "modhukati": {"upazila": "Modhukhali", "district": "Faridpur"},
     "faridpur": {"district": "Faridpur"},
     "ফরিদপুর": {"district": "Faridpur"},
     "dhaka": {"district": "Dhaka"},
