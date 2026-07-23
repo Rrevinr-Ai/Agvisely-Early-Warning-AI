@@ -7,6 +7,7 @@ from app.models.call_session import CallSession
 from app.models.farmer import Farmer
 from app.schemas import CallCreate, CallResponse
 from app.services.call_agent_service import call_agent_service
+from app.services.excel_advisory_service import detect_crop_from_text
 from app.services.location_service import extract_location_from_message, merge_location_context
 from app.services.whisper_service import whisper_service
 
@@ -144,6 +145,11 @@ async def process_call(payload: CallCreate, db: Session = Depends(get_db)):
         context["longitude"] = payload.longitude
     if payload.crop:
         context["preferred_crop"] = payload.crop
+
+    spoken_crop = detect_crop_from_text(question)
+    if spoken_crop:
+        # Spoken crop overrides form default (e.g. পাঠ/পাট vs aman rice chip)
+        context["preferred_crop"] = spoken_crop
 
     spoken_location = extract_location_from_message(question)
     context = merge_location_context(context, spoken_location)

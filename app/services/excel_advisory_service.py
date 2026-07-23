@@ -22,6 +22,12 @@ _CROP_ALIASES = {
     "আমন ধান": "aman rice",
     "rice": "aman rice",
     "ধান": "aman rice",
+    "wheat": "wheat",
+    "গম": "wheat",
+    "jute": "jute",
+    "পাট": "jute",
+    "পাঠ": "jute",  # STT: পাট → পাঠ
+    "পাট গাছ": "jute",
 }
 
 # Farmer / speech variants → Excel English stage name
@@ -123,20 +129,31 @@ def _normalize_crop(crop: str) -> Optional[str]:
 
 
 def detect_crop_from_text(text: str) -> Optional[str]:
-    """Infer crop from farmer speech (Bangla/English)."""
+    """Infer crop from farmer speech (Bangla/English), including common STT typos."""
     if not text:
         return None
     lowered = text.lower()
-    # Prefer specific Aman before generic rice
+    # Longer / specific first (jute STT পাঠ before generic rice)
     markers = (
         ("আমন ধান", "aman rice"),
         ("আমন", "aman rice"),
         ("aman rice", "aman rice"),
         ("rice farmer", "aman rice"),
-        ("ধান", "aman rice"),
-        ("rice", "aman rice"),
+        ("পাট লাগা", "jute"),
+        ("পাঠ লাগা", "jute"),
+        ("পাট লাগি", "jute"),
+        ("পাঠ লাগি", "jute"),
+        ("পাট বড়", "jute"),
+        ("পাঠ বড়", "jute"),
+        ("পাট বরো", "jute"),
+        ("পাঠ বরো", "jute"),
+        ("jute", "jute"),
+        ("পাট", "jute"),
+        ("পাঠ", "jute"),  # STT mishear of পাট
         ("wheat", "wheat"),
         ("গম", "wheat"),
+        ("ধান", "aman rice"),
+        ("rice", "aman rice"),
     )
     for marker, crop in markers:
         if marker in text or marker in lowered:
@@ -587,12 +604,21 @@ class ExcelAdvisoryService:
         normalized = re.sub(r"\s+", " ", (text or "").strip())
         return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
 
+    def list_weather_bullets(self, hit: dict) -> list[dict]:
+        if not hit.get("weather_thresholds_trusted"):
+            return []
+        weather_text = "\n".join(hit.get("weather_advisory_bn") or [])
+        return [
+            {"id": self.bullet_id(b), "text": b}
+            for b in self._extract_bullets(weather_text)
+        ]
+
     def list_gap_bullets(self, hit: dict) -> list[dict]:
         gap = "\n".join(hit.get("gap_advisory_bn") or hit.get("advisory_bn") or [])
-        weather_extra = "\n".join(hit.get("weather_advisory_bn") or [])
         bullets = self._extract_bullets(gap)
-        if hit.get("weather_thresholds_trusted"):
-            bullets.extend(self._extract_bullets(weather_extra))
+        # Keep weather tips available after GAP for non-weather intents / follow-ups
+        weather_bullets = [b["text"] for b in self.list_weather_bullets(hit)]
+        bullets.extend(weather_bullets)
         return [{"id": self.bullet_id(b), "text": b} for b in bullets]
 
     def select_bullets_for_dialog(
@@ -607,6 +633,13 @@ class ExcelAdvisoryService:
         """Pick Excel bullets by intent/history/constraints (no LLM)."""
         constraints = constraints or []
         said = set(said_bullet_ids or [])
+        weather_bullets = self.list_weather_bullets(hit)
+        gap_only = [
+            {"id": self.bullet_id(b), "text": b}
+            for b in self._extract_bullets(
+                "\n".join(hit.get("gap_advisory_bn") or hit.get("advisory_bn") or [])
+            )
+        ]
         all_bullets = self.list_gap_bullets(hit)
 
         pest_keys = (
@@ -659,8 +692,11 @@ class ExcelAdvisoryService:
                 later = pool[3:]
                 pool = later + fert_openers
         elif intent in {"weather", "weather_crop"}:
-            # Only 1–2 field tips with weather
-            pool = [b for b in pool if not is_soil_test(b)][:4]
+            # Interview Scenario 1: lead with Excel Temperature/Rainfall rows
+            gap_tips = [b for b in gap_only if not is_soil_test(b)]
+            pool = (weather_bullets or []) + gap_tips
+            if not pool:
+                pool = [b for b in all_bullets if not is_soil_test(b)]
 
         # Drop already-said when possible — except constraint alts which we force above
         if intent == "constraint" or "no_money_for_soil_test" in constraints:

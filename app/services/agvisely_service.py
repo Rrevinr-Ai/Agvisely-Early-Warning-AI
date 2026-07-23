@@ -6,6 +6,7 @@ from app.config import settings
 from app.services.demo_forecast_service import lookup_demo_forecast
 from app.services.excel_advisory_service import excel_advisory_service
 from app.services.gpt_backup_service import gpt_backup_service
+from app.services.live_weather_service import fetch_live_forecast
 
 _PLACEHOLDER_MARKERS = ("example", "your-", "placeholder", "real-agvisely")
 
@@ -139,7 +140,7 @@ class AgviselyService:
         district: Optional[str] = None,
         upazila: Optional[str] = None,
     ) -> dict:
-        # Interview/pilot demo forecasts take priority when enabled
+        # Optional static interview numbers (off by default)
         if settings.DEMO_FORECAST_ENABLED:
             demo = lookup_demo_forecast(district=district, upazila=upazila)
             if demo:
@@ -149,27 +150,45 @@ class AgviselyService:
                     demo["longitude"] = longitude
                 return demo
 
-        if not self._is_configured():
-            return await self._weather_fallback(district, upazila, latitude, longitude)
+        # 1) Real Agvisely API when configured
+        if self._is_configured():
+            params = {}
+            if latitude is not None and longitude is not None:
+                params["lat"] = latitude
+                params["lon"] = longitude
+            if district:
+                params["district"] = district
+            if upazila:
+                params["upazila"] = upazila
 
-        params = {}
-        if latitude is not None and longitude is not None:
-            params["lat"] = latitude
-            params["lon"] = longitude
-        if district:
-            params["district"] = district
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.get(
+                        f"{self.base_url}/weather",
+                        params=params,
+                        headers=self._headers(),
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    if isinstance(payload, dict):
+                        payload.setdefault("source", "agvisely")
+                        return payload
+            except (httpx.HTTPError, httpx.TimeoutException):
+                pass
 
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(
-                    f"{self.base_url}/weather",
-                    params=params,
-                    headers=self._headers(),
-                )
-                response.raise_for_status()
-                return response.json()
-        except (httpx.HTTPError, httpx.TimeoutException):
-            return await self._weather_fallback(district, upazila, latitude, longitude)
+        # 2) Live Open-Meteo forecast (trusted numeric thresholds for Excel)
+        if settings.LIVE_WEATHER_ENABLED:
+            live = await fetch_live_forecast(
+                latitude=latitude,
+                longitude=longitude,
+                district=district,
+                upazila=upazila,
+            )
+            if live:
+                return live
+
+        # 3) GPT / soft fallback
+        return await self._weather_fallback(district, upazila, latitude, longitude)
 
     async def get_crop_advisory(
         self,
@@ -182,7 +201,6 @@ class AgviselyService:
         include_weather: bool = False,
     ) -> dict:
         # Preferred path: Excel matrix → GPT fallback (2-tier selection).
-        # When demo forecasts exist for the location, always pull weather so Excel thresholds match.
         if settings.EXCEL_ADVISORY_ENABLED:
             use_weather = include_weather
             if settings.DEMO_FORECAST_ENABLED and lookup_demo_forecast(
