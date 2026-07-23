@@ -315,7 +315,8 @@ Repo → **Settings** → **Secrets and variables** → **Actions**
 |------|--------|
 | `DEPLOY_HOST` | VPS IP or hostname |
 | `DEPLOY_USER` | SSH username |
-| `DEPLOY_SSH_KEY` | Full private key file `agvisely-deploy` |
+| `DEPLOY_SSH_KEY` | Full private key (e.g. contents of `~/.ssh/id_ed25519`) |
+| `DEPLOY_SSH_PASSPHRASE` | Passphrase for that private key (leave empty secret if none) |
 | `GHCR_USERNAME` | GitHub username |
 | `GHCR_TOKEN` | PAT with `read:packages` |
 
