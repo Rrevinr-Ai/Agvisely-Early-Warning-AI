@@ -8,3 +8,5 @@ openai
 edge-tts
 twilio
 openpyxl
+pytest
+ruff

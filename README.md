@@ -24,16 +24,17 @@ Farmers can ask questions about **weather**, **crop advisories**, and **wheat di
 ## Project Structure
 
 ```
-Service_agent/
-├── app/
-│   ├── api/           # FastAPI routes
-│   ├── models/        # SQLAlchemy models (farmer, call, survey)
-│   ├── services/      # AI agent, Agvisely, GPT backup, TTS, Whisper
-│   ├── prompts/       # System prompt for call agent
-│   └── main.py        # FastAPI entry point
-├── frontend/          # React + Vite UI
+Agvisely-Early-Warning-AI/
+├── app/                    # FastAPI backend
+├── frontend/               # React + Vite UI
+├── tests/                  # pytest (used by CI)
+├── .github/workflows/      # GitHub Actions CI/CD
+│   ├── ci.yml
+│   └── deploy.yml
+├── Dockerfile              # Backend image
+├── docker-compose.yml
 ├── requirements.txt
-├── .env.example       # Environment template
+├── .env.example
 └── README.md
 ```
 
@@ -96,11 +97,11 @@ TTS_VOICE=bn-BD-PradeepNeural
 From project root (not inside `app/`):
 
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 9603
 ```
 
-API: http://127.0.0.1:8000  
-Docs: http://127.0.0.1:8000/docs
+API: http://127.0.0.1:9603  
+Docs: http://127.0.0.1:9603/docs
 
 ### 5. Run frontend
 
@@ -110,7 +111,7 @@ npm install
 npm run dev
 ```
 
-UI: http://127.0.0.1:5173
+UI: http://127.0.0.1:9604
 
 ---
 
@@ -135,7 +136,7 @@ UI: http://127.0.0.1:5173
 ## Example: Ask the AI Agent
 
 ```bash
-curl -X POST http://127.0.0.1:8000/calls/ \
+curl -X POST http://127.0.0.1:9603/calls/ \
   -H "Content-Type: application/json" \
   -d '{
     "phone_number": "01712345678",
@@ -176,6 +177,94 @@ Contact CIMMYT / Agvisely team for:
 - Documentation for weather & crop endpoints
 
 Until credentials are set, GPT backup provides general farming guidance with a disclaimer.
+
+---
+
+## CI/CD (GitHub Actions)
+
+This repo includes a full GitHub Actions setup for **Python FastAPI** + **React (Vite)** frontend.
+
+| Port | Service |
+|------|---------|
+| **9603** | Backend (FastAPI) |
+| **9604** | Frontend (Vite / nginx) |
+
+| Workflow | File | When it runs | What it does |
+|----------|------|--------------|--------------|
+| **CI** | `.github/workflows/ci.yml` | Push / PR to `main`, `master`, `develop` | Backend: Postgres service, install deps, Ruff lint, pytest. Frontend: `npm ci` + `npm run build` |
+| **Deploy** | `.github/workflows/deploy.yml` | After CI succeeds on `main`/`master`, or manual **Run workflow** | Build Docker images and push to **GitHub Container Registry** (`ghcr.io`) |
+
+### Full process: enable CI/CD on GitHub
+
+#### 1. Commit & push (from your machine)
+
+```bash
+git add .
+git commit -m "Add GitHub Actions CI/CD and set ports 9603/9604"
+git push -u origin main
+```
+
+Repo: https://github.com/Rrevinr-Ai/Agvisely-Early-Warning-AI
+
+#### 2. Allow Actions (first time only)
+
+1. Open the repo on GitHub.
+2. Click **Actions**.
+3. If you see “Workflows aren’t enabled…”, click **I understand my workflows, go ahead and enable them**.
+4. Confirm the **CI** and **Deploy** workflows appear under **All workflows**.
+
+#### 3. CI on every push / PR
+
+- Any push to `main`, `master`, or `develop` starts **CI**.
+- Any pull request targeting those branches also starts **CI**.
+- Open **Actions** → select the latest **CI** run to watch logs (backend tests + frontend build).
+- A green check on the commit means CI passed.
+
+#### 4. Deploy after CI succeeds
+
+- When **CI** finishes successfully on a **push** to `main`/`master`, **Deploy** starts automatically.
+- It builds and pushes:
+  - `ghcr.io/rrevinr-ai/agvisely-early-warning-ai-backend:latest`
+  - `ghcr.io/rrevinr-ai/agvisely-early-warning-ai-frontend:latest`
+- To run Deploy manually: **Actions** → **Deploy** → **Run workflow** → **Run workflow**.
+
+#### 5. Packages (Docker images)
+
+1. Repo → **Packages** (or https://github.com/orgs/Rrevinr-Ai/packages — or your user Packages tab).
+2. Or: https://github.com/Rrevinr-Ai?tab=packages
+3. Make a package public (optional): package → **Package settings** → **Change visibility**.
+
+#### 6. Run the same stack locally with Docker
+
+```bash
+cp .env.example .env
+# edit .env — set OPENAI_API_KEY and other secrets
+
+docker compose up --build
+```
+
+- Backend: http://127.0.0.1:9603  
+- Frontend: http://127.0.0.1:9604  
+- API docs: http://127.0.0.1:9603/docs  
+
+#### 7. Optional: deploy to a VPS after image push
+
+1. In `.github/workflows/deploy.yml`, uncomment the `restart-server` job.
+2. Repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
+
+| Secret | Meaning |
+|--------|---------|
+| `DEPLOY_HOST` | Server IP or hostname |
+| `DEPLOY_USER` | SSH user |
+| `DEPLOY_SSH_KEY` | Private SSH key |
+
+3. On the server, use `docker compose` that pulls from GHCR and maps **9603** / **9604**.
+
+### GitHub Packages login (private images)
+
+```bash
+echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+```
 
 ---
 

@@ -49,7 +49,7 @@ class Settings:
     TTS_VOICE: str = os.getenv("TTS_VOICE", "bn-BD-PradeepNeural")
 
     # Telephony (real phone calls)
-    PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
+    PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "http://localhost:9603")
     TELEPHONY_PROVIDER: str = os.getenv("TELEPHONY_PROVIDER", "twilio")
     TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
     TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
