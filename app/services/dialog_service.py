@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any, Optional
 
 from app.services.excel_advisory_service import detect_crop_from_text, detect_stage_from_text

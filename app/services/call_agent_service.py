@@ -23,7 +23,6 @@ from app.services.excel_advisory_service import (
 from app.services.location_service import resolve_location
 from app.services.speak_service import sanitize_farmer_speech, speak_service
 
-
 AGENT_TOOLS = [
     {
         "type": "function",
